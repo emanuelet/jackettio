@@ -1,0 +1,5 @@
+allowBuilds:
+  sqlite3: true
+
+overrides:
+  tar: ^7.5.21

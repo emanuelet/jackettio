@@ -46,7 +46,7 @@ async function getMediaflowProxyPublicIp(userConfig) {
 		const data = await response.json();
 		const publicIp = data.ip;
 		if (publicIp) {
-			await cache.set(cacheKey, publicIp, { ttl: 300 }); // Cache for 5 minutes
+			await cache.set(cacheKey, publicIp, 300e3); // Cache for 5 minutes
 			return publicIp;
 		}
 	} catch (error) {

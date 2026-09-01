@@ -81,9 +81,7 @@ export default class Cinemeta {
 		}
 
 		if (data && cacheOpts.key && cacheOpts.ttl > 0) {
-			await cache.set(`cinemeta:${cacheOpts.key}`, data, {
-				ttl: cacheOpts.ttl,
-			});
+			await cache.set(`cinemeta:${cacheOpts.key}`, data, cacheOpts.ttl * 1000);
 		}
 
 		return data;

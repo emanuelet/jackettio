@@ -457,7 +457,7 @@ async function getDebridFiles(userConfig, infos, debridInstance) {
 	} else {
 		let buffer = await torrentInfos.getTorrentFile(infos);
 
-		if (config.replacePasskey) {
+		if (config.replacePasskey && infos.private) {
 			if (infos.private && !userConfig.passkey) {
 				return debridInstance.getFilesFromHash(infos.infoHash);
 			}
@@ -606,7 +606,7 @@ export async function getDownload(userConfig, type, stremioId, torrentId) {
 
 		if (download) {
 			download = applyMediaflowProxyIfNeeded(download, userConfig);
-			await cache.set(cacheKey, download, { ttl: 3600 });
+			await cache.set(cacheKey, download, 3600e3);
 			return download;
 		}
 

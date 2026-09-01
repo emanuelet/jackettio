@@ -21,7 +21,7 @@ export async function searchMovieTorrents({ indexer, name, year }) {
 			{ t: "search", cat: CATEGORY.MOVIE, q: name /*, year: year*/ },
 		);
 		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, { ttl: items.length > 0 ? 3600 * 36 : 60 });
+		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
 	}
 
 	return normalizeItems(items);
@@ -38,7 +38,7 @@ export async function searchSerieTorrents({ indexer, name, year }) {
 			{ t: "search", cat: CATEGORY.SERIES, q: `${name}` },
 		);
 		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, { ttl: items.length > 0 ? 3600 * 36 : 60 });
+		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
 	}
 
 	return normalizeItems(items);
@@ -55,7 +55,7 @@ export async function searchSeasonTorrents({ indexer, name, year, season }) {
 			{ t: "search", cat: CATEGORY.SERIES, q: `${name} S${numberPad(season)}` },
 		);
 		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, { ttl: items.length > 0 ? 3600 * 36 : 60 });
+		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
 	}
 
 	return normalizeItems(items);
@@ -82,7 +82,7 @@ export async function searchEpisodeTorrents({
 			},
 		);
 		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, { ttl: items.length > 0 ? 3600 * 36 : 60 });
+		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
 	}
 
 	return normalizeItems(items);
@@ -105,7 +105,11 @@ async function jackettApi(path, query) {
 
 	let data;
 	const res = await fetch(url);
-	if (res.headers.get("content-type").includes("application/json")) {
+	const redactedUrl = url.replace(/apikey=[a-z0-9-]+/, "apikey=****");
+	if (!res.ok) {
+		throw new Error(`jackettApi: ${redactedUrl}: HTTP ${res.status}`);
+	}
+	if ((res.headers.get("content-type") || "").includes("application/json")) {
 		data = await res.json();
 	} else {
 		const text = await res.text();
@@ -115,7 +119,7 @@ async function jackettApi(path, query) {
 
 	if (data.error) {
 		throw new Error(
-			`jackettApi: ${url.replace(/apikey=[a-z0-9-]+/, "apikey=****")} : ${data.error?.$?.description || data.error}`,
+			`jackettApi: ${redactedUrl} : ${data.error?.$?.description || data.error}`,
 		);
 	}
 
@@ -125,10 +129,12 @@ async function jackettApi(path, query) {
 function normalizeItems(items) {
 	return forceArray(items).map((item) => {
 		item = mergeDollarKeys(item);
-		const attr = item["torznab:attr"].reduce((obj, item) => {
-			obj[item.name] = item.value;
-			return obj;
-		}, {});
+		const attr = forceArray(item["torznab:attr"])
+			.filter(Boolean)
+			.reduce((obj, item) => {
+				obj[item.name] = item.value;
+				return obj;
+			}, {});
 		const quality = item.title.match(/(2160|1080|720|480|360)p/);
 		const title = parseWords(item.title).join(" ");
 		const year = item.title

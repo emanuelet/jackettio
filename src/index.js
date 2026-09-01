@@ -1,14 +1,13 @@
-import { readFileSync } from "node:fs";
+import compress from "@fastify/compress";
+import rateLimit from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
+import { createReadStream, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import path from "node:path";
-import compression from "compression";
-import express from "express";
-import { rateLimit } from "express-rate-limit";
+import Fastify from "fastify";
 import localtunnel from "localtunnel";
 import showdown from "showdown";
-import cache, {
-	clean as cleanCache,
-	vacuum as vacuumCache,
-} from "./lib/cache.js";
+import cache from "./lib/cache.js";
 import config from "./lib/config.js";
 import * as debrid from "./lib/debrid.js";
 import * as icon from "./lib/icon.js";
@@ -21,252 +20,236 @@ const converter = new showdown.Converter();
 const welcomeMessageHtml = config.welcomeMessage
 	? `${converter.makeHtml(config.welcomeMessage)}<div class="my-4 border-top border-secondary-subtle"></div>`
 	: "";
-const addon = JSON.parse(readFileSync(`./package.json`));
-const app = express();
+const addon = JSON.parse(readFileSync("./package.json"));
 
-const respond = (res, data) => {
-	res.setHeader("Access-Control-Allow-Origin", "*");
-	res.setHeader("Access-Control-Allow-Headers", "*");
-	res.setHeader("Content-Type", "application/json");
-	res.send(data);
-};
+function respond(reply, data) {
+	return reply
+		.header("Access-Control-Allow-Origin", "*")
+		.header("Access-Control-Allow-Headers", "*")
+		.type("application/json")
+		.send(data);
+}
 
-const limiter = rateLimit({
-	windowMs: config.rateLimitWindow * 1000,
-	max: config.rateLimitRequest,
-	legacyHeaders: false,
-	standardHeaders: "draft-7",
-	keyGenerator: (req) => req.clientIp || req.ip,
-	handler: (req, res, next, options) => {
-		if (req.route.path == "/:userConfig/stream/:type/:id.json") {
-			const resetInMs = new Date(req.rateLimit.resetTime) - new Date();
-			return res.json({
-				streams: [
-					{
-						name: `${config.addonName}`,
-						title: `🛑 Too many requests, please try in ${Math.ceil(resetInMs / 1000 / 60)} minute(s).`,
-						url: "#",
-					},
-				],
-			});
-		} else {
-			return res.status(options.statusCode).send(options.message);
+function streamRateLimitError(context) {
+	const error = new Error(`Rate limit exceeded, retry in ${context.after}`);
+	error.statusCode = context.statusCode;
+	error.streams = [
+		{
+			name: config.addonName,
+			title: `🛑 Too many requests, please try in ${Math.ceil(context.ttl / 1000 / 60)} minute(s).`,
+			url: "#",
+		},
+	];
+	return error;
+}
+
+export async function buildApp() {
+	const app = Fastify({ trustProxy: config.trustProxy });
+
+	await app.register(fastifyStatic, {
+		root: path.join(import.meta.dirname, "static"),
+		maxAge: 86400e3,
+	});
+	await app.register(compress);
+	await app.register(rateLimit, {
+		global: false,
+		enableDraftSpec: true,
+		errorResponseBuilder: (_request, context) => streamRateLimitError(context),
+	});
+
+	app.addHook("onRequest", async (request) => {
+		request.clientIp = config.trustCfIpHeader
+			? request.headers["cf-connecting-ip"] || request.ip
+			: request.ip;
+	});
+
+	app.addHook("onRequest", async (request) => {
+		console.log(
+			`${request.method} ${request.url.replace(/\/eyJ[\w=]+/g, "/*******************")}`,
+		);
+	});
+
+	app.get("/", async (_request, reply) => reply.redirect("/configure"));
+
+	app.get("/icon", async (_request, reply) => {
+		const filePath = await icon.getLocation();
+		return reply
+			.type(path.basename(filePath))
+			.header("Cache-Control", "public, max-age=3600")
+			.send(createReadStream(filePath));
+	});
+
+	const configure = async (request, reply) => {
+		const indexers = (await getIndexers().catch(() => [])).map((indexer) => ({
+			value: indexer.id,
+			label: indexer.title,
+			types: ["movie", "series"].filter(
+				(type) => indexer.searching[type].available,
+			),
+		}));
+		const templateConfig = {
+			debrids: await debrid.list(),
+			addon: {
+				version: addon.version,
+				name: config.addonName,
+			},
+			userConfig: request.params.userConfig || "",
+			defaultUserConfig: config.defaultUserConfig,
+			qualities: config.qualities,
+			languages: config.languages
+				.map((language) => ({ value: language.value, label: language.label }))
+				.filter((value) => value.value !== "multi"),
+			metaLanguages: await meta.getLanguages(),
+			sorts: config.sorts,
+			indexers,
+			passkey: { enabled: false },
+			immulatableUserConfigKeys: config.immulatableUserConfigKeys,
+		};
+		if (config.replacePasskey) {
+			templateConfig.passkey = {
+				enabled: true,
+				infoUrl: config.replacePasskeyInfoUrl,
+				pattern: config.replacePasskeyPattern,
+			};
 		}
-	},
-});
+		const template = readFileSync("./src/template/configure.html")
+			.toString()
+			.replace(
+				"/** import-config */",
+				`const config = ${JSON.stringify(templateConfig, null, 2)}`,
+			)
+			.replace("<!-- welcome-message -->", welcomeMessageHtml);
+		return reply.type("text/html; charset=utf-8").send(template);
+	};
+	app.get("/configure", configure);
+	app.get("/:userConfig/configure", configure);
 
-app.set("trust proxy", config.trustProxy);
-
-app.use((req, res, next) => {
-	req.clientIp = req.ip;
-	if (req.get("CF-Connecting-IP")) {
-		req.clientIp = req.get("CF-Connecting-IP");
-	}
-	next();
-});
-
-app.use(compression());
-app.use(
-	express.static(path.join(import.meta.dirname, "static"), { maxAge: 86400e3 }),
-);
-
-app.get("/", (req, res) => {
-	res.redirect("/configure");
-	res.end();
-});
-
-app.get("/icon", async (req, res) => {
-	const filePath = await icon.getLocation();
-	res.contentType(path.basename(filePath));
-	res.setHeader("Cache-Control", `public, max-age=${3600}`);
-	return res.sendFile(filePath);
-});
-
-app.use((req, res, next) => {
-	console.log(
-		`${req.method} ${req.path.replace(/\/eyJ[\w=]+/g, "/*******************")}`,
-	);
-	next();
-});
-
-app.get("/:userConfig?/configure", async (req, res) => {
-	const indexers = (await getIndexers().catch(() => [])).map((indexer) => ({
-		value: indexer.id,
-		label: indexer.title,
-		types: ["movie", "series"].filter(
-			(type) => indexer.searching[type].available,
-		),
-	}));
-	const templateConfig = {
-		debrids: await debrid.list(),
-		addon: {
+	const manifest = async (request, reply) => {
+		const manifestData = {
+			id: config.addonId,
 			version: addon.version,
 			name: config.addonName,
-		},
-		userConfig: req.params.userConfig || "",
-		defaultUserConfig: config.defaultUserConfig,
-		qualities: config.qualities,
-		languages: config.languages
-			.map((l) => ({ value: l.value, label: l.label }))
-			.filter((v) => v.value != "multi"),
-		metaLanguages: await meta.getLanguages(),
-		sorts: config.sorts,
-		indexers,
-		passkey: { enabled: false },
-		immulatableUserConfigKeys: config.immulatableUserConfigKeys,
-	};
-	if (config.replacePasskey) {
-		templateConfig.passkey = {
-			enabled: true,
-			infoUrl: config.replacePasskeyInfoUrl,
-			pattern: config.replacePasskeyPattern,
+			description: config.addonDescription,
+			icon: `${request.hostname === "localhost" ? "http" : "https"}://${request.hostname}/icon`,
+			resources: ["stream"],
+			types: ["movie", "series"],
+			idPrefixes: ["tt"],
+			catalogs: [],
+			behaviorHints: { configurable: true },
 		};
-	}
-	const template = readFileSync(`./src/template/configure.html`)
-		.toString()
-		.replace(
-			"/** import-config */",
-			`const config = ${JSON.stringify(templateConfig, null, 2)}`,
-		)
-		.replace("<!-- welcome-message -->", welcomeMessageHtml);
-	return res.send(template);
-});
-
-// https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/advanced.md#using-user-data-in-addons
-app.get("/:userConfig?/manifest.json", async (req, res) => {
-	const manifest = {
-		id: config.addonId,
-		version: addon.version,
-		name: config.addonName,
-		description: config.addonDescription,
-		icon: `${req.hostname == "localhost" ? "http" : "https"}://${req.hostname}/icon`,
-		resources: ["stream"],
-		types: ["movie", "series"],
-		idPrefixes: ["tt"],
-		catalogs: [],
-		behaviorHints: { configurable: true },
-	};
-	if (req.params.userConfig) {
-		const userConfig = JSON.parse(atob(req.params.userConfig));
-		const debridInstance = debrid.instance(userConfig);
-		manifest.name += ` ${debridInstance.shortName}`;
-	}
-	respond(res, manifest);
-});
-
-app.get("/:userConfig/stream/:type/:id.json", limiter, async (req, res) => {
-	try {
-		const streams = await jackettio.getStreams(
-			Object.assign(JSON.parse(atob(req.params.userConfig)), {
-				ip: req.clientIp,
-			}),
-			req.params.type,
-			req.params.id,
-			`${req.hostname == "localhost" ? "http" : "https"}://${req.hostname}`,
-		);
-
-		return respond(res, { streams });
-	} catch (err) {
-		console.log(req.params.id, err);
-		return respond(res, { streams: [] });
-	}
-});
-
-app.get("/stream/:type/:id.json", async (req, res) => {
-	return respond(res, {
-		streams: [
-			{
-				name: config.addonName,
-				title: `ℹ Kindly configure this addon to access streams.`,
-				url: "#",
-			},
-		],
-	});
-});
-
-app.use(
-	"/:userConfig/download/:type/:id/:torrentId/:name?",
-	async (req, res, next) => {
-		if (req.method !== "GET" && req.method !== "HEAD") {
-			return next();
+		if (request.params.userConfig) {
+			const userConfig = JSON.parse(atob(request.params.userConfig));
+			const debridInstance = debrid.instance(userConfig);
+			manifestData.name += ` ${debridInstance.shortName}`;
 		}
+		return respond(reply, manifestData);
+	};
+	app.get("/manifest.json", manifest);
+	app.get("/:userConfig/manifest.json", manifest);
 
+	app.get(
+		"/:userConfig/stream/:type/:id.json",
+		{
+			config: {
+				rateLimit: {
+					timeWindow: config.rateLimitWindow * 1000,
+					max: config.rateLimitRequest,
+					keyGenerator: (request) => request.clientIp || request.ip,
+				},
+			},
+		},
+		async (request, reply) => {
+			try {
+				const streams = await jackettio.getStreams(
+					Object.assign(JSON.parse(atob(request.params.userConfig)), {
+						ip: request.clientIp,
+					}),
+					request.params.type,
+					request.params.id,
+					`${request.hostname === "localhost" ? "http" : "https"}://${request.hostname}`,
+				);
+				return respond(reply, { streams });
+			} catch (error) {
+				console.log(request.params.id, error);
+				return respond(reply, { streams: [] });
+			}
+		},
+	);
+
+	app.get("/stream/:type/:id.json", async (_request, reply) =>
+		respond(reply, {
+			streams: [
+				{
+					name: config.addonName,
+					title: "ℹ Kindly configure this addon to access streams.",
+					url: "#",
+				},
+			],
+		}),
+	);
+
+	const download = async (request, reply) => {
 		try {
 			const url = await jackettio.getDownload(
-				Object.assign(JSON.parse(atob(req.params.userConfig)), {
-					ip: req.clientIp,
+				Object.assign(JSON.parse(atob(request.params.userConfig)), {
+					ip: request.clientIp,
 				}),
-				req.params.type,
-				req.params.id,
-				req.params.torrentId,
+				request.params.type,
+				request.params.id,
+				request.params.torrentId,
 			);
 
 			const parsed = new URL(url);
 			const cut = (value) =>
-				value ? `${value.substr(0, 5)}******${value.substr(-5)}` : "";
+				value ? `${value.substring(0, 5)}******${value.substring(-5)}` : "";
 			console.log(
-				`${req.params.id} : Redirect: ${parsed.protocol}//${parsed.host}${cut(parsed.pathname)}${cut(parsed.search)}`,
+				`${request.params.id} : Redirect: ${parsed.protocol}//${parsed.host}${cut(parsed.pathname)}${cut(parsed.search)}`,
 			);
 
-			res.status(302);
-			res.set("location", url);
-			res.send("");
-		} catch (err) {
-			console.log(req.params.id, err);
+			return reply.code(302).header("location", url).send("");
+		} catch (error) {
+			console.log(request.params.id, error);
 
-			switch (err.message) {
-				case debrid.ERROR.NOT_READY:
-					res.status(302);
-					res.set("location", `/videos/not_ready.mp4`);
-					res.send("");
-					break;
-				case debrid.ERROR.EXPIRED_API_KEY:
-					res.status(302);
-					res.set("location", `/videos/expired_api_key.mp4`);
-					res.send("");
-					break;
-				case debrid.ERROR.NOT_PREMIUM:
-					res.status(302);
-					res.set("location", `/videos/not_premium.mp4`);
-					res.send("");
-					break;
-				case debrid.ERROR.ACCESS_DENIED:
-					res.status(302);
-					res.set("location", `/videos/access_denied.mp4`);
-					res.send("");
-					break;
-				case debrid.ERROR.TWO_FACTOR_AUTH:
-					res.status(302);
-					res.set("location", `/videos/two_factor_auth.mp4`);
-					res.send("");
-					break;
-				default:
-					res.status(302);
-					res.set("location", `/videos/error.mp4`);
-					res.send("");
-			}
+			const errorVideos = {
+				[debrid.ERROR.NOT_READY]: "/videos/not_ready.mp4",
+				[debrid.ERROR.EXPIRED_API_KEY]: "/videos/expired_api_key.mp4",
+				[debrid.ERROR.NOT_PREMIUM]: "/videos/not_premium.mp4",
+				[debrid.ERROR.ACCESS_DENIED]: "/videos/access_denied.mp4",
+				[debrid.ERROR.TWO_FACTOR_AUTH]: "/videos/two_factor_auth.mp4",
+			};
+			return reply
+				.code(302)
+				.header("location", errorVideos[error.message] || "/videos/error.mp4")
+				.send("");
 		}
-	},
-);
+	};
+	app.get("/:userConfig/download/:type/:id/:torrentId", download);
+	app.get("/:userConfig/download/:type/:id/:torrentId/:name", download);
 
-app.use((req, res) => {
-	if (req.xhr) {
-		res.status(404).send({ error: "Page not found!" });
-	} else {
-		res.status(404).send("Page not found!");
-	}
-});
+	app.setNotFoundHandler((request, reply) => {
+		if (request.headers["x-requested-with"] === "XMLHttpRequest") {
+			return reply.code(404).send({ error: "Page not found!" });
+		}
+		return reply.code(404).send("Page not found!");
+	});
 
-app.use((err, req, res, next) => {
-	console.error(err.stack);
-	if (req.xhr) {
-		res.status(500).send({ error: "Something broke!" });
-	} else {
-		res.status(500).send("Something broke!");
-	}
-});
+	app.setErrorHandler((error, request, reply) => {
+		console.error(error.stack);
+		if (error.streams) {
+			return reply.code(error.statusCode).send({ streams: error.streams });
+		}
+		if (request.headers["x-requested-with"] === "XMLHttpRequest") {
+			return reply.code(500).send({ error: "Something broke!" });
+		}
+		return reply.code(500).send("Something broke!");
+	});
 
-const server = app.listen(config.port, async () => {
+	return app;
+}
+
+export async function start() {
+	const app = await buildApp();
+	await app.listen({ port: config.port, host: "0.0.0.0" });
 	console.log("───────────────────────────────────────");
 	console.log(`Started addon ${addon.name} v${addon.version}`);
 	console.log(`Server listen at: http://localhost:${config.port}`);
@@ -276,9 +259,7 @@ const server = app.listen(config.port, async () => {
 	if (config.localtunnel) {
 		const subdomain = await cache.get("localtunnel:subdomain");
 		tunnel = await localtunnel({ port: config.port, subdomain });
-		await cache.set("localtunnel:subdomain", tunnel.clientId, {
-			ttl: 86400 * 365,
-		});
+		await cache.set("localtunnel:subdomain", tunnel.clientId, 86400e3 * 365);
 		console.log(
 			`Your addon is available on the following address: ${tunnel.url}/configure`,
 		);
@@ -287,27 +268,31 @@ const server = app.listen(config.port, async () => {
 
 	icon
 		.download()
-		.catch((err) => console.log(`Failed to download icon: ${err}`));
+		.catch((error) => console.log(`Failed to download icon: ${error}`));
 
 	const intervals = [];
 	createTorrentFolder();
 	intervals.push(setInterval(cleanTorrentFolder, 3600e3));
 
-	vacuumCache().catch((err) => console.log(`Failed to vacuum cache: ${err}`));
-	intervals.push(setInterval(() => vacuumCache(), 86400e3 * 7));
-
-	cleanCache().catch((err) => console.log(`Failed to clean cache: ${err}`));
-	intervals.push(setInterval(() => cleanCache(), 3600e3));
-
-	function closeGracefully(signal) {
+	async function closeGracefully(signal) {
 		console.log(`Received signal to terminate: ${signal}`);
 		if (tunnel) tunnel.close();
-		intervals.forEach((interval) => clearInterval(interval));
-		server.close(() => {
-			console.log("Server closed");
-			process.kill(process.pid, signal);
+		intervals.forEach((interval) => {
+			clearInterval(interval);
 		});
+		await app.close();
+		console.log("Server closed");
 	}
-	process.once("SIGINT", closeGracefully);
-	process.once("SIGTERM", closeGracefully);
-});
+	process.once("SIGINT", () => closeGracefully("SIGINT"));
+	process.once("SIGTERM", () => closeGracefully("SIGTERM"));
+}
+
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+	start().catch((error) => {
+		console.error(error);
+		process.exitCode = 1;
+	});
+}

@@ -5,11 +5,13 @@ RUN mkdir -p /home/node/app && chown -R node:node /home/node/app \
 
 WORKDIR /home/node/app
 
-COPY --chown=node:node package*.json ./
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+RUN npm install --global pnpm@11.25.0
 
 USER node
 
-RUN npm install
+RUN pnpm install --prod --frozen-lockfile
 
 COPY --chown=node:node ./src ./src
 

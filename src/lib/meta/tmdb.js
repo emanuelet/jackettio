@@ -105,7 +105,7 @@ export default class Tmdb {
 		}
 
 		if (data && cacheOpts.key && cacheOpts.ttl > 0) {
-			await cache.set(`tmdb:${cacheOpts.key}`, data, { ttl: cacheOpts.ttl });
+			await cache.set(`tmdb:${cacheOpts.key}`, data, cacheOpts.ttl * 1000);
 		}
 
 		return data;

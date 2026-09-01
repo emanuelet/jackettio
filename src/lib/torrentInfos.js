@@ -111,7 +111,7 @@ export async function getById(id) {
 
 async function setById(id, infos) {
 	const cacheKey = `torrentInfos:${id}`;
-	await cache.set(cacheKey, infos, { ttl: 86400 * CACHE_FILE_DAYS });
+	await cache.set(cacheKey, infos, 86400 * CACHE_FILE_DAYS * 1000);
 
 	return infos;
 }
