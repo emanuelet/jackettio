@@ -1,0 +1,51 @@
+name: jackettio
+
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_HTML: ${LOG_HTML:-false}
+      CAPTCHA_SOLVER: ${CAPTCHA_SOLVER:-none}
+    networks:
+      - jackettio
+    restart: unless-stopped
+
+  jackettio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      DATA_FOLDER: /data
+    networks:
+      jackettio: {}
+      coolify:
+        aliases:
+          - jackettio
+    restart: unless-stopped
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - jackettio-data:/data
+
+  mediaflow-proxy:
+    image: mhdzumair/mediaflow-proxy:latest
+    environment:
+      API_PASSWORD: ${MEDIAFLOW_API_PASSWORD:?Set MEDIAFLOW_API_PASSWORD in Coolify}
+      # MediaFlow's Python logging accepts standard uppercase level names only.
+      LOG_LEVEL: INFO
+    networks:
+      jackettio: {}
+      coolify:
+        aliases:
+          - mediaflow-proxy
+    restart: unless-stopped
+
+networks:
+  jackettio:
+  coolify:
+    external: true
+
+volumes:
+  jackettio-data:

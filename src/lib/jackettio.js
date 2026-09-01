@@ -379,6 +379,20 @@ export async function getStreams(userConfig, type, stremioId, publicUrl){
     if(torrent.progress && !torrent.isCached){
       rows.push(`⬇️ ${torrent.progress.percent}% ${bytesToSize(torrent.progress.speed)}/s`);
     }
+    if (userConfig.debridId === 'p2p') {
+      const fileIdx = file.index !== undefined ? file.index : 0;
+      return {
+        name: '[P2P] ' + config.addonName + ' ' + quality,
+        title: rows.join('\n'),
+        infoHash: torrent.infos.infoHash,
+        fileIdx: fileIdx,
+        behaviorHints: {
+          bingeGroup: 'ampere-p2p-' + quality,
+          filename: file.name || torrent.name
+        }
+      };
+    }
+
     return {
       name: `[${debridInstance.shortName}${torrent.isCached ? '+' : ''}] ${userConfig.enableMediaFlow ? '🕵🏼‍♂️ ' : ''}${config.addonName} ${quality}`,
       title: rows.join("\n"),

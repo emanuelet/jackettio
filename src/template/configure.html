@@ -177,7 +177,7 @@
         </div>
 
         <div class="my-3 d-flex align-items-center">
-          <button @click="configure" type="button" class="btn btn-primary" :disabled="!debrid.id">{{isUpdate ? 'Update' : 'Install'}}</button>
+          <button @click="configure" type="button" class="btn btn-primary" >{{isUpdate ? 'Update' : 'Install'}}</button>
           <div v-if="error" class="text-danger ms-2">{{error}}</div>
           <div class="ms-auto">
             <a v-if="manifestUrl" :href="manifestUrl">Stremio Link</a>
