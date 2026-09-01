@@ -7,3 +7,5 @@ docker-compose-dev.yml
 # Ignore environment files
 .env
 .env.*
+
+.codebase-memory
