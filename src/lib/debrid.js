@@ -1,30 +1,30 @@
-import p2p from "./debrid/p2p.js";
-import debridlink from "./debrid/debridlink.js";
 import alldebrid from "./debrid/alldebrid.js";
-import realdebrid from './debrid/realdebrid.js';
-import premiumize from './debrid/premiumize.js';
-export {ERROR} from './debrid/const.js';
+import debridlink from "./debrid/debridlink.js";
+import p2p from "./debrid/p2p.js";
+import premiumize from "./debrid/premiumize.js";
+import realdebrid from "./debrid/realdebrid.js";
 
-const debrid = {p2p, debridlink, alldebrid, realdebrid, premiumize};
+export { ERROR } from "./debrid/const.js";
 
-export function instance(userConfig){
+const debrid = { p2p, debridlink, alldebrid, realdebrid, premiumize };
 
-  if(!debrid[userConfig.debridId]){
-    throw new Error(`Debrid service "${userConfig.debridId} not exists`);
-  }
-  
-  return new debrid[userConfig.debridId](userConfig);
+export function instance(userConfig) {
+	if (!debrid[userConfig.debridId]) {
+		throw new Error(`Debrid service "${userConfig.debridId} not exists`);
+	}
+
+	return new debrid[userConfig.debridId](userConfig);
 }
 
-export async function list(){
-  const values = [];
-  for(const instance of Object.values(debrid)){
-    values.push({
-      id: instance.id,
-      name: instance.name,
-      shortName: instance.shortName,
-      configFields: instance.configFields
-    })
-  }
-  return values;
+export async function list() {
+	const values = [];
+	for (const instance of Object.values(debrid)) {
+		values.push({
+			id: instance.id,
+			name: instance.name,
+			shortName: instance.shortName,
+			configFields: instance.configFields,
+		});
+	}
+	return values;
 }
