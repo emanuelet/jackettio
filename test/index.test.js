@@ -34,6 +34,16 @@ test("returns configuration guidance for unconfigured stream requests", async ()
 	});
 });
 
+test("returns a manifest for saved configurations without a debrid selection", async () => {
+	const userConfig = Buffer.from(
+		JSON.stringify({ qualities: [1080] }),
+	).toString("base64");
+	const response = await app.inject(`/${userConfig}/manifest.json`);
+
+	assert.equal(response.statusCode, 200);
+	assert.equal(response.json().name, "Jackettio");
+});
+
 test("returns the existing XHR 404 response shape", async () => {
 	const response = await app.inject({
 		method: "GET",

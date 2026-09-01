@@ -139,8 +139,10 @@ export async function buildApp() {
 		};
 		if (request.params.userConfig) {
 			const userConfig = JSON.parse(atob(request.params.userConfig));
-			const debridInstance = debrid.instance(userConfig);
-			manifestData.name += ` ${debridInstance.shortName}`;
+			const debridService = (await debrid.list()).find(
+				(service) => service.id === userConfig.debridId,
+			);
+			if (debridService) manifestData.name += ` ${debridService.shortName}`;
 		}
 		return respond(reply, manifestData);
 	};
