@@ -44,6 +44,17 @@ test("returns a manifest for saved configurations without a debrid selection", a
 	assert.equal(response.json().name, "Jackettio");
 });
 
+test("returns a manifest for long encoded configurations", async () => {
+	const userConfig = Buffer.from(
+		JSON.stringify({ debridId: "p2p", padding: "x".repeat(500) }),
+	).toString("base64");
+	const response = await app.inject(`/${userConfig}/manifest.json`);
+
+	assert.equal(userConfig.length, 708);
+	assert.equal(response.statusCode, 200);
+	assert.equal(response.json().name, "Jackettio P2P");
+});
+
 test("returns the existing XHR 404 response shape", async () => {
 	const response = await app.inject({
 		method: "GET",

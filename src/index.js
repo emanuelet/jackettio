@@ -44,7 +44,13 @@ function streamRateLimitError(context) {
 }
 
 export async function buildApp() {
-	const app = Fastify({ trustProxy: config.trustProxy });
+	const app = Fastify({
+		trustProxy: config.trustProxy,
+		routerOptions: {
+			// Stremio serializes user settings into this route parameter.
+			maxParamLength: 4096,
+		},
+	});
 
 	await app.register(fastifyStatic, {
 		root: path.join(import.meta.dirname, "static"),
