@@ -1,6 +1,6 @@
-import crypto from "crypto";
-import path from "path";
-import { URL } from "url";
+import crypto from "node:crypto";
+import path from "node:path";
+import { URL } from "node:url";
 import cache from "./cache.js";
 
 const PRIVATE_CIDR = /^(10\.|127\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/;
@@ -88,6 +88,8 @@ function encodeMediaflowProxyUrl(
 }
 
 export async function updateUserConfigWithMediaFlowIp(userConfig) {
+	if (userConfig.debridId === "p2p") return userConfig;
+
 	if (
 		userConfig.enableMediaFlow &&
 		userConfig.mediaflowProxyUrl &&
