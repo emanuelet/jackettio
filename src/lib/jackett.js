@@ -1,64 +1,101 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { Parser } from "xml2js";
 import cache from "./cache.js";
 import config from "./config.js";
+import { createSingleFlight, jackettRequests } from "./requests.js";
 import { numberPad, parseWords } from "./util.js";
+
+const searches = createSingleFlight();
+const indexerRequests = createSingleFlight();
+
+async function searchItems(
+	cacheKey,
+	indexer,
+	query,
+	timeoutMs,
+	onRequestStart,
+) {
+	const items = await searches(`${cacheKey}:${timeoutMs}`, async () => {
+		const cached = await cache.get(cacheKey);
+		if (cached) return cached;
+		const res = await jackettRequests((signal) => {
+			onRequestStart?.();
+			return jackettApi(
+				`/api/v2.0/indexers/${indexer}/results/torznab/api`,
+				query,
+				signal,
+			);
+		}, timeoutMs);
+		const items = res?.rss?.channel?.item || [];
+		await cache.set(
+			cacheKey,
+			items,
+			(items.length > 0 ? 3600 * 36 : 60) * 1000,
+		);
+		return items;
+	});
+	// Each caller mutates its torrent results during filtering and debrid checks.
+	return normalizeItems(structuredClone(items));
+}
 
 export const CATEGORY = {
 	MOVIE: 2000,
 	SERIES: 5000,
 };
 
-export async function searchMovieTorrents({ indexer, name, year }) {
+export async function searchMovieTorrents({
+	indexer,
+	name,
+	year,
+	timeoutMs = config.defaultUserConfig.indexerTimeoutSec * 1000,
+	onRequestStart,
+}) {
 	indexer = indexer || "all";
 	const cacheKey = `jackettItems:2:movie:${indexer}:${name}:${year}`;
-	let items = await cache.get(cacheKey);
-
-	if (!items) {
-		const res = await jackettApi(
-			`/api/v2.0/indexers/${indexer}/results/torznab/api`,
-			// year is buggy with some indexers
-			{ t: "search", cat: CATEGORY.MOVIE, q: name /*, year: year*/ },
-		);
-		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
-	}
-
-	return normalizeItems(items);
+	return searchItems(
+		cacheKey,
+		indexer,
+		{ t: "search", cat: CATEGORY.MOVIE, q: name },
+		timeoutMs,
+		onRequestStart,
+	);
 }
 
-export async function searchSerieTorrents({ indexer, name, year }) {
+export async function searchSerieTorrents({
+	indexer,
+	name,
+	year,
+	timeoutMs = config.defaultUserConfig.indexerTimeoutSec * 1000,
+	onRequestStart,
+}) {
 	indexer = indexer || "all";
 	const cacheKey = `jackettItems:2:serie:${indexer}:${name}:${year}`;
-	let items = await cache.get(cacheKey);
-
-	if (!items) {
-		const res = await jackettApi(
-			`/api/v2.0/indexers/${indexer}/results/torznab/api`,
-			{ t: "search", cat: CATEGORY.SERIES, q: `${name}` },
-		);
-		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
-	}
-
-	return normalizeItems(items);
+	return searchItems(
+		cacheKey,
+		indexer,
+		{ t: "search", cat: CATEGORY.SERIES, q: `${name}` },
+		timeoutMs,
+		onRequestStart,
+	);
 }
 
-export async function searchSeasonTorrents({ indexer, name, year, season }) {
+export async function searchSeasonTorrents({
+	indexer,
+	name,
+	year,
+	season,
+	timeoutMs = config.defaultUserConfig.indexerTimeoutSec * 1000,
+	onRequestStart,
+}) {
 	indexer = indexer || "all";
 	const cacheKey = `jackettItems:2:season:${indexer}:${name}:${year}:${season}`;
-	let items = await cache.get(cacheKey);
-
-	if (!items) {
-		const res = await jackettApi(
-			`/api/v2.0/indexers/${indexer}/results/torznab/api`,
-			{ t: "search", cat: CATEGORY.SERIES, q: `${name} S${numberPad(season)}` },
-		);
-		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
-	}
-
-	return normalizeItems(items);
+	return searchItems(
+		cacheKey,
+		indexer,
+		{ t: "search", cat: CATEGORY.SERIES, q: `${name} S${numberPad(season)}` },
+		timeoutMs,
+		onRequestStart,
+	);
 }
 
 export async function searchEpisodeTorrents({
@@ -67,46 +104,53 @@ export async function searchEpisodeTorrents({
 	year,
 	season,
 	episode,
+	timeoutMs = config.defaultUserConfig.indexerTimeoutSec * 1000,
+	onRequestStart,
 }) {
 	indexer = indexer || "all";
 	const cacheKey = `jackettItems:2:episode:${indexer}:${name}:${year}:${season}:${episode}`;
-	let items = await cache.get(cacheKey);
-
-	if (!items) {
-		const res = await jackettApi(
-			`/api/v2.0/indexers/${indexer}/results/torznab/api`,
-			{
-				t: "search",
-				cat: CATEGORY.SERIES,
-				q: `${name} S${numberPad(season)}E${numberPad(episode)}`,
-			},
-		);
-		items = res?.rss?.channel?.item || [];
-		cache.set(cacheKey, items, (items.length > 0 ? 3600 * 36 : 60) * 1000);
-	}
-
-	return normalizeItems(items);
+	return searchItems(
+		cacheKey,
+		indexer,
+		{
+			t: "search",
+			cat: CATEGORY.SERIES,
+			q: `${name} S${numberPad(season)}E${numberPad(episode)}`,
+		},
+		timeoutMs,
+		onRequestStart,
+	);
 }
 
-export async function getIndexers() {
-	const res = await jackettApi("/api/v2.0/indexers/all/results/torznab/api", {
-		t: "indexers",
-		configured: "true",
-	});
+export async function getIndexers(
+	timeoutMs = config.defaultUserConfig.indexerTimeoutSec * 1000,
+) {
+	const res = await indexerRequests(`${timeoutMs}`, () =>
+		jackettRequests(
+			(signal) =>
+				jackettApi(
+					"/api/v2.0/indexers/all/results/torznab/api",
+					{ t: "indexers", configured: "true" },
+					signal,
+				),
+			timeoutMs,
+		),
+	);
 
-	return normalizeIndexers(res?.indexers?.indexer || []);
+	return normalizeIndexers(structuredClone(res?.indexers?.indexer || []));
 }
 
-async function jackettApi(path, query) {
+async function jackettApi(path, query, signal) {
 	const params = new URLSearchParams(query || {});
 	params.set("apikey", config.jackettApiKey);
 
 	const url = `${config.jackettUrl}${path}?${params.toString()}`;
 
 	let data;
-	const res = await fetch(url);
+	const res = await fetch(url, { signal });
 	const redactedUrl = url.replace(/apikey=[a-z0-9-]+/, "apikey=****");
 	if (!res.ok) {
+		await res.body?.cancel();
 		throw new Error(`jackettApi: ${redactedUrl}: HTTP ${res.status}`);
 	}
 	if ((res.headers.get("content-type") || "").includes("application/json")) {
@@ -145,15 +189,15 @@ function normalizeItems(items) {
 			guid: item.guid,
 			indexerId: item.jackettindexer.id,
 			id: crypto.createHash("sha1").update(item.guid).digest("hex"),
-			size: parseInt(item.size),
+			size: parseInt(item.size, 10),
 			link: item.link,
-			seeders: parseInt(attr.seeders || 0),
-			peers: parseInt(attr.peers || 0),
+			seeders: parseInt(attr.seeders || 0, 10),
+			peers: parseInt(attr.peers || 0, 10),
 			infoHash: attr.infohash || "",
 			magneturl: attr.magneturl || "",
 			type: item.type,
-			quality: quality ? parseInt(quality[1]) : 0,
-			year: year ? parseInt(year.pop()) : 0,
+			quality: quality ? parseInt(quality[1], 10) : 0,
+			year: year ? parseInt(year.pop(), 10) : 0,
 			languages: config.languages.filter((lang) => title.match(lang.pattern)),
 		};
 	});
@@ -165,20 +209,20 @@ function normalizeIndexers(items) {
 		const searching = item.caps.searching;
 		return {
 			id: item.id,
-			configured: item.configured == "true",
+			configured: item.configured === "true",
 			title: item.title,
 			language: item.language,
 			type: item.type,
 			categories: forceArray(item.caps.categories.category).map((category) =>
-				parseInt(category.id),
+				parseInt(category.id, 10),
 			),
 			searching: {
 				movie: {
-					available: searching["movie-search"].available == "yes",
+					available: searching["movie-search"].available === "yes",
 					supportedParams: searching["movie-search"].supportedParams.split(","),
 				},
 				series: {
-					available: searching["tv-search"].available == "yes",
+					available: searching["tv-search"].available === "yes",
 					supportedParams: searching["tv-search"].supportedParams.split(","),
 				},
 			},

@@ -10,6 +10,9 @@ import path from "node:path";
 import parseTorrent, { toMagnetURI } from "parse-torrent";
 import cache from "./cache.js";
 import config from "./config.js";
+import { createSingleFlight, torrentRequests } from "./requests.js";
+
+const pendingInfos = createSingleFlight();
 
 const TORRENT_FOLDER = `${config.dataFolder}/torrents`;
 const CACHE_FILE_DAYS = 7;
@@ -31,10 +34,20 @@ export async function cleanTorrentFolder() {
 	}
 }
 
-export async function get({ link, id, magnetUrl, infoHash, name, size, type }) {
+export async function get(torrent, timeoutMs = 30000) {
+	const infos = await pendingInfos(`${torrent.id}:${timeoutMs}`, () =>
+		getInfos(torrent, timeoutMs),
+	);
+	return structuredClone(infos);
+}
+
+async function getInfos(
+	{ link, id, magnetUrl, infoHash, name, size, type },
+	timeoutMs,
+) {
 	try {
 		return await getById(id);
-	} catch (err) {}
+	} catch {}
 
 	let parseInfos = null;
 	let torrentLocation = "";
@@ -50,7 +63,10 @@ export async function get({ link, id, magnetUrl, infoHash, name, size, type }) {
 		if (link.startsWith("http")) {
 			try {
 				torrentLocation = `${TORRENT_FOLDER}/${id}.torrent`;
-				const buffer = await downloadTorrentFile({ link, id, torrentLocation });
+				const buffer = await downloadTorrentFile(
+					{ link, id, torrentLocation },
+					timeoutMs,
+				);
 				parseInfos = await parseTorrent(new Uint8Array(buffer));
 
 				if (!parseInfos.private) {
@@ -58,7 +74,7 @@ export async function get({ link, id, magnetUrl, infoHash, name, size, type }) {
 				}
 			} catch (err) {
 				torrentLocation = "";
-				if (err.redirection && err.redirection.startsWith("magnet")) {
+				if (err.redirection?.startsWith("magnet")) {
 					link = err.redirection;
 				} else {
 					throw err;
@@ -120,34 +136,44 @@ export async function getTorrentFile(infos) {
 	if (infos.torrentLocation) {
 		try {
 			return await readFile(infos.torrentLocation);
-		} catch (err) {}
+		} catch {}
 	}
 
 	return downloadTorrentFile(infos);
 }
 
-async function downloadTorrentFile({ link, id, torrentLocation }) {
-	const res = await fetch(link, { redirect: "manual" });
+async function downloadTorrentFile(
+	{ link, torrentLocation },
+	timeoutMs = 30000,
+) {
+	return torrentRequests(async (signal) => {
+		const res = await fetch(link, { redirect: "manual", signal });
 
-	if (res.headers.has("location")) {
-		throw Object.assign(new Error(`Redirection detected ...`), {
-			redirection: res.headers.get("location"),
-		});
-	}
+		if (res.headers.has("location")) {
+			await res.body?.cancel();
+			throw Object.assign(new Error(`Redirection detected ...`), {
+				redirection: res.headers.get("location"),
+			});
+		}
 
-	if (
-		!(res.headers.get("content-type") || "").includes(
-			"application/x-bittorrent",
-		)
-	) {
-		throw new Error(`Invalid content-type: ${res.headers.get("content-type")}`);
-	}
+		if (
+			!(res.headers.get("content-type") || "").includes(
+				"application/x-bittorrent",
+			)
+		) {
+			await res.body?.cancel();
+			throw new Error(
+				`Invalid content-type: ${res.headers.get("content-type")}`,
+			);
+		}
 
-	if (res.status !== 200) {
-		throw new Error(`Invalid status: ${res.status}`);
-	}
+		if (res.status !== 200) {
+			await res.body?.cancel();
+			throw new Error(`Invalid status: ${res.status}`);
+		}
 
-	const buffer = await res.arrayBuffer();
-	writeFile(torrentLocation, new Uint8Array(buffer));
-	return buffer;
+		const buffer = await res.arrayBuffer();
+		writeFile(torrentLocation, new Uint8Array(buffer));
+		return buffer;
+	}, timeoutMs);
 }

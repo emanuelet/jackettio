@@ -111,6 +111,19 @@ docker run --env-file .env \
 
 ## Configuration
 
+### Outbound request scheduling
+
+Jackett HTTP requests share a limit of 5 active requests per process. Torrent-file
+HTTP requests use a separate limit of 5. Cache hits bypass these queues. Concurrent
+identical searches and torrent-info lookups with the same timeout share in-flight
+work; each caller receives independent results.
+
+Indexer timeouts start when queued HTTP work begins, not while waiting for a slot.
+Torrent-file downloads use a maximum of 30 seconds during stream searches, reduced
+by the user's indexer timeout when shorter. Timeouts abort the request and response
+body reading; the queue slot is released after the operation settles. Queue wait
+is excluded from slow-indexer timing, but can increase total response latency.
+
 Jackettio is designed for selfhosted, whether for personal or public use. As a server owner, effortlessly configure many settings with environement variables.
 
 - **Addon ID** `ADDON_ID` Change the `id` field in stremio manifest

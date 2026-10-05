@@ -1,9 +1,9 @@
+import { createReadStream, readFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import compress from "@fastify/compress";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
-import { createReadStream, readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-import path from "node:path";
 import Fastify from "fastify";
 import localtunnel from "localtunnel";
 import showdown from "showdown";

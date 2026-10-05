@@ -1,4 +1,4 @@
-import { setTimeout } from "timers/promises";
+import { setTimeout } from "node:timers/promises";
 
 export function numberPad(number, count) {
 	return `${number}`.padStart(count || 2, 0);
@@ -13,7 +13,7 @@ export function parseWords(str) {
 
 export function sortBy(...keys) {
 	return (a, b) => {
-		if (typeof keys[0] == "string") keys = [keys];
+		if (typeof keys[0] === "string") keys = [keys];
 		for (const [key, reverse] of keys) {
 			if (a[key] > b[key]) return reverse ? -1 : 1;
 			if (a[key] < b[key]) return reverse ? 1 : -1;
@@ -25,8 +25,8 @@ export function sortBy(...keys) {
 export function bytesToSize(bytes) {
 	const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
 	if (bytes === 0) return "0 Byte";
-	const i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
-	return Math.round((bytes / 1024 ** i) * 100) / 100 + " " + sizes[i];
+	const i = Math.floor(Math.log(bytes) / Math.log(1024));
+	return `${Math.round((bytes / 1024 ** i) * 100) / 100} ${sizes[i]}`;
 }
 
 export function wait(ms) {
@@ -57,15 +57,14 @@ export function isVideo(filename) {
 	].includes(filename?.split(".").pop());
 }
 
-export async function promiseTimeout(promise, ms) {
+export async function promiseTimeout(task, ms) {
 	const ac = new AbortController();
-	const waitPromise = setTimeout(ms, null, { signal: ac.signal }).then(() =>
-		Promise.reject(`Max execution time reached ${ms}`),
-	);
-	return Promise.race([
-		waitPromise,
-		promise.finally(() => {
-			ac.abort();
-		}),
-	]);
+	const timer = globalThis.setTimeout(() => {
+		ac.abort(new Error(`Max execution time reached ${ms}`));
+	}, ms);
+	try {
+		return await task(ac.signal);
+	} finally {
+		globalThis.clearTimeout(timer);
+	}
 }
