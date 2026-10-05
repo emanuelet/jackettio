@@ -7,7 +7,7 @@ WORKDIR /home/node/app
 
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN npm install --global pnpm@11.25.0
+RUN npm install --global pnpm@12.5.1
 
 USER node
 
